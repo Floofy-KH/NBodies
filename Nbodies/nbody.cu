@@ -76,11 +76,16 @@ void advance_gpued(int nbodies, planet<T> *bodies)
   Timer timer;
   timer.start("advance_gpued");
   
+  planet<T> *devBodies;
+  cudaMalloc(&devBodies, nbodies*sizeof(planet<T>));
+  cudaMemcpy(devBodies, bodies, nbodies*sizeof(planet<T>), cudaMemcpyHostToDevice);
   //Advance velocities
-  advanceVelocities <<<nbodies, ceil(nbodies / 2)>>>(nbodies, bodies);
+  advanceVelocities << <nbodies, ceil(nbodies / 2) >> >(nbodies, devBodies);
 
   //Advance positions
-  advancePositions <<<nbodies, 1>>>(nbodies, bodies);
+  advancePositions << <nbodies, 1 >> >(nbodies, devBodies);
+  cudaMemcpy(bodies, devBodies, nbodies*sizeof(planet<T>), cudaMemcpyDeviceToHost);
+  cudaFree(devBodies);
 
   timer.end();
 }
