@@ -17,7 +17,7 @@
 #include <cstdlib>
 #include <iomanip>
 
-#define GPU 1
+#define GPU 0
 
 using type = double;
 
@@ -36,23 +36,25 @@ template <typename T>
 __global__ void advanceVelocities(int nbodies, planet<T> *bodies)
 {
   int i = threadIdx.x + blockIdx.x*blockDim.x;
-  int j = threadIdx.y + blockIdx.y*blockDim.y;
 
-  if (i < nbodies && j < nbodies)
+  if (i < nbodies)
   {
     planet<T> &b = bodies[i];
-    planet<T> &b2 = bodies[j];
-    T dx = b.x - b2.x;
-    T dy = b.y - b2.y;
-    T dz = b.z - b2.z;
-    T inv_distance = 1.0 / sqrt(dx * dx + dy * dy + dz * dz);
-    T mag = inv_distance * inv_distance * inv_distance;
-    b.vx -= dx * b2.mass * mag;
-    b.vy -= dy * b2.mass * mag;
-    b.vz -= dz * b2.mass * mag;
-    b2.vx += dx * b.mass  * mag;
-    b2.vy += dy * b.mass  * mag;
-    b2.vz += dz * b.mass  * mag;
+    for (int j = i + 1; j < nbodies; ++j)
+    {
+      planet<T> &b2 = bodies[j];
+      T dx = b.x - b2.x;
+      T dy = b.y - b2.y;
+      T dz = b.z - b2.z;
+      T inv_distance = 1.0 / sqrt(dx * dx + dy * dy + dz * dz);
+      T mag = inv_distance * inv_distance * inv_distance;
+      b.vx -= dx * b2.mass * mag;
+      b.vy -= dy * b2.mass * mag;
+      b.vz -= dz * b2.mass * mag;
+      b2.vx += dx * b.mass  * mag;
+      b2.vy += dy * b.mass  * mag;
+      b2.vz += dz * b.mass  * mag;
+    }
   }
 }
 
@@ -75,17 +77,11 @@ void advance_gpued(int nbodies, planet<T> *bodies)
 {
   Timer timer;
   timer.start("advance_gpued");
-  
-  planet<T> *devBodies;
-  cudaMalloc(&devBodies, nbodies*sizeof(planet<T>));
-  cudaMemcpy(devBodies, bodies, nbodies*sizeof(planet<T>), cudaMemcpyHostToDevice);
   //Advance velocities
-  advanceVelocities << <nbodies, ceil(nbodies / 2) >> >(nbodies, devBodies);
+  advanceVelocities << <nbodies, 1 >> >(nbodies, bodies);
 
   //Advance positions
-  advancePositions << <nbodies, 1 >> >(nbodies, devBodies);
-  cudaMemcpy(bodies, devBodies, nbodies*sizeof(planet<T>), cudaMemcpyDeviceToHost);
-  cudaFree(devBodies);
+  advancePositions << <nbodies, 1 >> >(nbodies, bodies);
 
   timer.end();
 }
@@ -266,6 +262,11 @@ int main(int argc, char ** argv)
   type e1 = energy(nbodies, bodies);
   scale_bodies(nbodies, bodies, DT);
   Timer timerAdvance; timerAdvance.start("arch_advance");
+#if GPU
+  planet<type> *devBodies;
+  cudaMalloc(&devBodies, nbodies*sizeof(planet<type>));
+  cudaMemcpy(devBodies, bodies, nbodies*sizeof(planet<type>), cudaMemcpyHostToDevice);
+#endif
   for (int i = 1; i <= niters; ++i)  {
 #if GPU
     advance_gpued(nbodies, bodies);
@@ -273,6 +274,10 @@ int main(int argc, char ** argv)
     advance(nbodies, bodies);
 #endif
   }
+#if GPU
+  cudaMemcpy(bodies, devBodies, nbodies*sizeof(planet<type>), cudaMemcpyDeviceToHost);
+  cudaFree(devBodies);
+#endif
   timerAdvance.end();
   scale_bodies(nbodies, bodies, RECIP_DT);
 
