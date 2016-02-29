@@ -17,7 +17,7 @@
 #include <cstdlib>
 #include <iomanip>
 
-#define GPU 0
+#define GPU 1
 
 using type = double;
 
@@ -78,10 +78,21 @@ void advance_gpued(int nbodies, planet<T> *bodies)
   Timer timer;
   timer.start("advance_gpued");
   //Advance velocities
-  advanceVelocities << <nbodies, 1 >> >(nbodies, bodies);
-
+  advanceVelocities << <1, nbodies >> >(nbodies, bodies);
+ /* cudaDeviceSynchronize();
+  cudaError_t error = cudaGetLastError();
+  if (error != cudaSuccess)
+  {
+    std::cout << "Error in velocity kernal: " << cudaGetErrorString(error) << std::endl;
+  }*/
   //Advance positions
-  advancePositions << <nbodies, 1 >> >(nbodies, bodies);
+  advancePositions << <1, nbodies >> >(nbodies, bodies);
+  /*cudaDeviceSynchronize();
+  error = cudaGetLastError();
+  if (error != cudaSuccess)
+  {
+    std::cout << "Error in position kernal: " << cudaGetErrorString(error) << std::endl;
+  }*/
 
   timer.end();
 }
@@ -236,6 +247,12 @@ void init_random_bodies(int nbodies, planet<T> *bodies)
 
 int main(int argc, char ** argv)
 {
+#if GPU
+	std::cout << "GPU\n";
+#else
+	std::cout << "CPU\n";
+#endif
+
   int niters = 1000, nbodies = 5;
   if (argc > 1) { niters  = atoi(argv[1]); }
   if (argc > 2) { nbodies = atoi(argv[2]); }
@@ -262,22 +279,47 @@ int main(int argc, char ** argv)
   type e1 = energy(nbodies, bodies);
   scale_bodies(nbodies, bodies, DT);
   Timer timerAdvance; timerAdvance.start("arch_advance");
+
 #if GPU
-  planet<type> *devBodies;
-  cudaMalloc(&devBodies, nbodies*sizeof(planet<type>));
-  cudaMemcpy(devBodies, bodies, nbodies*sizeof(planet<type>), cudaMemcpyHostToDevice);
+  planet<type> *devBodies = nullptr;
+  cudaError_t error = cudaMalloc(&devBodies, nbodies*sizeof(planet<type>));
+  if (error != cudaSuccess)
+  {
+    std::cout << "Failed to allocate global memory for CUDA. \n";
+    return -1;
+  }
+  error = cudaMemcpy(devBodies, bodies, nbodies*sizeof(planet<type>), cudaMemcpyHostToDevice);
+  if (error != cudaSuccess)
+  {
+    std::cout << "Failed to copy from host to device memory: " << cudaGetErrorString(error) << std::endl;
+    return -1;
+  }
 #endif
+
   for (int i = 1; i <= niters; ++i)  {
+
 #if GPU
-    advance_gpued(nbodies, bodies);
+    advance_gpued(nbodies, devBodies);
 #else
     advance(nbodies, bodies);
 #endif
+
   }
+
 #if GPU
-  cudaMemcpy(bodies, devBodies, nbodies*sizeof(planet<type>), cudaMemcpyDeviceToHost);
-  cudaFree(devBodies);
+  memset(bodies, 0, nbodies*sizeof(planet<type>));
+  error = cudaMemcpy(bodies, devBodies, nbodies*sizeof(planet<type>), cudaMemcpyDeviceToHost);
+  if (error != cudaSuccess)
+  {
+    std::cout << "Failed to copy from device to host memory: " << cudaGetErrorString(error) << std::endl;
+  }
+  error = cudaFree(devBodies);
+  if (error != cudaSuccess)
+  {
+    std::cout << "Failed to free device memory. \n";
+  }
 #endif
+
   timerAdvance.end();
   scale_bodies(nbodies, bodies, RECIP_DT);
 
