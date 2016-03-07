@@ -35,8 +35,8 @@ struct planet {
 template <typename T>
 __global__ void advanceVelocities(int nbodies, planet<T> *bodies)
 {
-  int i = threadIdx.x + blockIdx.x*blockDim.x;
-  int j = threadIdx.y + blockIdx.y*blockDim.y;
+  int i = threadIdx.x;
+  int j = blockIdx.x;
 
   if (i < nbodies && j < nbodies)
   {
@@ -77,7 +77,7 @@ void advance_gpued(int nbodies, planet<T> *bodies)
   Timer timer;
   timer.start("advance_gpued");
   //Advance velocities
-  advanceVelocities << <nbodies, nbodies >> >(nbodies, bodies);
+  advanceVelocities <<<nbodies, nbodies>>>(nbodies, bodies);
  /* cudaDeviceSynchronize();
   cudaError_t error = cudaGetLastError();
   if (error != cudaSuccess)
