@@ -36,25 +36,24 @@ template <typename T>
 __global__ void advanceVelocities(int nbodies, planet<T> *bodies)
 {
   int i = threadIdx.x + blockIdx.x*blockDim.x;
+  int j = threadIdx.y + blockIdx.y*blockDim.y;
 
-  if (i < nbodies)
+  if (i < nbodies && j < nbodies)
   {
     planet<T> &b = bodies[i];
-    for (int j = i + 1; j < nbodies; ++j)
-    {
-      planet<T> &b2 = bodies[j];
-      T dx = b.x - b2.x;
-      T dy = b.y - b2.y;
-      T dz = b.z - b2.z;
-      T inv_distance = 1.0 / sqrt(dx * dx + dy * dy + dz * dz);
-      T mag = inv_distance * inv_distance * inv_distance;
-      b.vx -= dx * b2.mass * mag;
-      b.vy -= dy * b2.mass * mag;
-      b.vz -= dz * b2.mass * mag;
-      b2.vx += dx * b.mass  * mag;
-      b2.vy += dy * b.mass  * mag;
-      b2.vz += dz * b.mass  * mag;
-    }
+    planet<T> &b2 = bodies[j];
+    T dx = b.x - b2.x;
+    T dy = b.y - b2.y;
+    T dz = b.z - b2.z;
+    T inv_distance = 1.0 / sqrt(dx * dx + dy * dy + dz * dz);
+    T mag = inv_distance * inv_distance * inv_distance;
+    mag *= fmax(0.0, fmin(1.0, (type)(j-i))); //Returns either 1 or 0. 1 if j is valid, 0 if it is not. 
+    b.vx -= dx * b2.mass * mag;
+    b.vy -= dy * b2.mass * mag;
+    b.vz -= dz * b2.mass * mag;
+    b2.vx += dx * b.mass  * mag;
+    b2.vy += dy * b.mass  * mag;
+    b2.vz += dz * b.mass  * mag;
   }
 }
 
@@ -78,7 +77,7 @@ void advance_gpued(int nbodies, planet<T> *bodies)
   Timer timer;
   timer.start("advance_gpued");
   //Advance velocities
-  advanceVelocities << <1, nbodies >> >(nbodies, bodies);
+  advanceVelocities << <nbodies, nbodies >> >(nbodies, bodies);
  /* cudaDeviceSynchronize();
   cudaError_t error = cudaGetLastError();
   if (error != cudaSuccess)
