@@ -35,10 +35,11 @@ struct planet {
 template <typename T>
 __global__ void advanceVelocities(int nbodies, planet<T> *bodies)
 {
-  int i = threadIdx.x;
-  int j = blockIdx.x;
+  int j = threadIdx.x;
+  int i = blockIdx.x;
+  //T valid = fmax(0.0, fmin(1.0, (T)(j - i))); //Returns either 1 or 0. 1 if j is valid, 0 if it is not. 
 
-  if (i < nbodies && j < nbodies)
+  if (i < nbodies && j < nbodies && j>i)
   {
     planet<T> &b = bodies[i];
     planet<T> &b2 = bodies[j];
@@ -47,7 +48,6 @@ __global__ void advanceVelocities(int nbodies, planet<T> *bodies)
     T dz = b.z - b2.z;
     T inv_distance = 1.0 / sqrt(dx * dx + dy * dy + dz * dz);
     T mag = inv_distance * inv_distance * inv_distance;
-    mag *= fmax(0.0, fmin(1.0, (type)(j-i))); //Returns either 1 or 0. 1 if j is valid, 0 if it is not. 
     b.vx -= dx * b2.mass * mag;
     b.vy -= dy * b2.mass * mag;
     b.vz -= dz * b2.mass * mag;
@@ -78,20 +78,20 @@ void advance_gpued(int nbodies, planet<T> *bodies)
   timer.start("advance_gpued");
   //Advance velocities
   advanceVelocities <<<nbodies, nbodies>>>(nbodies, bodies);
- /* cudaDeviceSynchronize();
+  cudaDeviceSynchronize();
   cudaError_t error = cudaGetLastError();
   if (error != cudaSuccess)
   {
     std::cout << "Error in velocity kernal: " << cudaGetErrorString(error) << std::endl;
-  }*/
+  }
   //Advance positions
   advancePositions << <1, nbodies >> >(nbodies, bodies);
-  /*cudaDeviceSynchronize();
+  cudaDeviceSynchronize();
   error = cudaGetLastError();
   if (error != cudaSuccess)
   {
     std::cout << "Error in position kernal: " << cudaGetErrorString(error) << std::endl;
-  }*/
+  }
 
   timer.end();
 }
