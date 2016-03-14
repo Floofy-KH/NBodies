@@ -16,8 +16,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <iomanip>
+#include <string>
 
-#define GPU 0
 #define DP 1
 
 #if DP
@@ -83,8 +83,6 @@ __global__ void advancePositions(int nbodies, planet<T> *bodies, int offset)
 template <typename T>
 void advance_gpued(int nbodies, planet<T> *bodies)
 {
-  Timer timer;
-  timer.start("advance_gpued");
   //Advance velocities
   int numIterations = ceil(nbodies / maxThreadsPerBlock);
   for (int i = 0; i < numIterations; ++i)
@@ -108,14 +106,11 @@ void advance_gpued(int nbodies, planet<T> *bodies)
   {
     std::cout << "Error in position kernal: " << cudaGetErrorString(error) << std::endl;
   }
-
-  timer.end();
 }
 
 template <typename T>
 void advance(int nbodies, planet<T> *bodies)
 {
-  Timer timer; timer.start("advance");
   int i, j;
 
   for (i = 0; i < nbodies; ++i) {
@@ -141,13 +136,11 @@ void advance(int nbodies, planet<T> *bodies)
     b.y += b.vy;
     b.z += b.vz;
   }
-  timer.end();
 }
 
 template <typename T>
 T energy(int nbodies, planet<T> *bodies)
 {
-  Timer timer; timer.start("energy");
   T e = 0.0;
   for (int i = 0; i < nbodies; ++i) {
     planet<T> &b = bodies[i];
@@ -161,13 +154,11 @@ T energy(int nbodies, planet<T> *bodies)
       e -= (b.mass * b2.mass) / distance;
     }
   }
-  timer.end();
   return e;
 }
 template <typename T>
 void offset_momentum(int nbodies, planet<T> *bodies)
 {
-  Timer timer; timer.start("offset_momentum");
   T px = 0.0, py = 0.0, pz = 0.0;
   for (int i = 0; i < nbodies; ++i) {
     px += bodies[i].vx * bodies[i].mass;
@@ -177,7 +168,6 @@ void offset_momentum(int nbodies, planet<T> *bodies)
   bodies[0].vx = - px / solar_mass;
   bodies[0].vy = - py / solar_mass;
   bodies[0].vz = - pz / solar_mass;
-  timer.end();
 }
 
 struct planet<type> golden_bodies[5] = {
@@ -234,20 +224,17 @@ const type RECIP_DT{(type)1.0/DT};
 template <typename T>
 void scale_bodies(int nbodies, planet<T> *bodies, T scale)
 {
-  Timer timer; timer.start("scale_bodies");
   for (int i = 0; i < nbodies; ++i) {
     bodies[i].mass *= scale*scale;
     bodies[i].vx   *= scale;
     bodies[i].vy   *= scale;
     bodies[i].vz   *= scale;
   }
-  timer.end();
 }
 
 template <typename T>
 void init_random_bodies(int nbodies, planet<T> *bodies)
 {
-  Timer timer; timer.start("init_random_bodies");
   for (int i = 0; i < nbodies; ++i) {
     bodies[i].x    =  (T)rand()/RAND_MAX;
     bodies[i].y    =  (T)rand()/RAND_MAX;
@@ -257,7 +244,84 @@ void init_random_bodies(int nbodies, planet<T> *bodies)
     bodies[i].vz   =  (T)rand()/RAND_MAX;
     bodies[i].mass =  (T)rand()/RAND_MAX;
   }
-  timer.end();
+}
+
+template <typename T>
+void run(int nbodies, int iterations, bool gpu)
+{
+  planet<type> *bodies;
+  if (nbodies == 5) {
+    bodies = golden_bodies; // Check accuracy with 1000 solar system iterations
+  }
+  else {
+    bodies = new planet<type>[nbodies];
+    init_random_bodies(nbodies, bodies);
+  }
+
+  std::string runName = std::to_string(nbodies);
+  runName += "," + iterations;
+  Timer timerMain; timerMain.start(runName);
+  offset_momentum(nbodies, bodies);
+  type e1 = energy(nbodies, bodies);
+  scale_bodies(nbodies, bodies, DT);
+
+  planet<type> *devBodies = nullptr;
+  cudaError_t error;
+
+  if (gpu)
+  {
+    //Allocate memory on the GPU for the list of bodies. 
+    error = cudaMalloc(&devBodies, nbodies*sizeof(planet<type>));
+    if (error != cudaSuccess)
+    {
+      std::cout << "Failed to allocate global memory for CUDA. \n";
+    }
+    //Copy the list of bodies to the GPU memory
+    error = cudaMemcpy(devBodies, bodies, nbodies*sizeof(planet<type>), cudaMemcpyHostToDevice);
+    if (error != cudaSuccess)
+    {
+      std::cout << "Failed to copy from host to device memory: " << cudaGetErrorString(error) << std::endl;
+    }
+  }
+
+  for (int i = 1; i <= iterations; ++i)  
+  {
+    if (gpu)
+    {
+      advance_gpued(nbodies, devBodies);
+    }
+    else
+    {
+      advance(nbodies, bodies);
+    }
+  }
+
+  if (gpu)
+  {
+    //Set all memory for the list of bodies on the CPU to zero to ensure there are no random errors. 
+    memset(bodies, 0, nbodies*sizeof(planet<type>));
+    //Copy data from GPU memory to CPU memory
+    error = cudaMemcpy(bodies, devBodies, nbodies*sizeof(planet<type>), cudaMemcpyDeviceToHost);
+    if (error != cudaSuccess)
+    {
+      std::cout << "Failed to copy from device to host memory: " << cudaGetErrorString(error) << std::endl;
+    }
+    //Free memory on the GPU
+    error = cudaFree(devBodies);
+    if (error != cudaSuccess)
+    {
+      std::cout << "Failed to free device memory. \n";
+    }
+  }
+  scale_bodies(nbodies, bodies, RECIP_DT);
+
+  type e2 = energy(nbodies, bodies);
+
+  std::cout << std::setprecision(9);
+  std::cout << e1 << '\n' << e2 << '\n';
+  timerMain.end();
+
+  if (bodies != golden_bodies) { delete[] bodies; }
 }
 
 int main(int argc, char ** argv)
@@ -265,27 +329,8 @@ int main(int argc, char ** argv)
 	cudaDeviceGetAttribute(&maxThreadsPerBlock, cudaDevAttrMaxThreadsPerBlock, 0);
 	cudaDeviceGetAttribute(&maxSharedMemPerBlock, cudaDevAttrMaxSharedMemoryPerBlock, 0);
 	cudaDeviceGetAttribute(&threadsPerWarp, cudaDevAttrWarpSize, 0);
-#if GPU
-	std::cout << "GPU\n";
-	std::cout << "Max Threads/Block: " << maxThreadsPerBlock << std::endl;
-  std::cout << "Max Shared Mem/Block: " << maxSharedMemPerBlock << std::endl;
-  std::cout << "Warp Size: " << threadsPerWarp << std::endl;
-#else
-	std::cout << "CPU\n";
-#endif
-
-  int niters = 1000, nbodies = 5;
-  if (argc > 1) { niters  = atoi(argv[1]); }
-  if (argc > 2) { nbodies = atoi(argv[2]); }
-
-  std::cout << "niters=" << niters << " nbodies=" << nbodies << '\n';
 
   std::string outputName = "outputTimes";
-#if GPU
-  outputName += "_GPU";
-#else
-  outputName += "_CPU";
-#endif
 #if DP
   outputName += "_double";
 #else
@@ -296,75 +341,8 @@ int main(int argc, char ** argv)
   std::ofstream outStream(outputName);
   Timer::setFileStream(&outStream);
 
-  planet<type> *bodies;
-  if (argc == 1) { 
-    bodies = golden_bodies; // Check accuracy with 1000 solar system iterations
-  } else {
-    bodies = new planet<type>[nbodies];
-    init_random_bodies(nbodies, bodies);
-  }
+  run<type>(1000, 1000, true);
 
-  Timer timerMain; timerMain.start("Main");
-  offset_momentum(nbodies, bodies);
-  type e1 = energy(nbodies, bodies);
-  scale_bodies(nbodies, bodies, DT);
-  Timer timerAdvance; timerAdvance.start("arch_advance");
-
-#if GPU
-  //Allocate memory on the GPU for the list of bodies. 
-  planet<type> *devBodies = nullptr;
-  cudaError_t error = cudaMalloc(&devBodies, nbodies*sizeof(planet<type>));
-  if (error != cudaSuccess)
-  {
-    std::cout << "Failed to allocate global memory for CUDA. \n";
-    return -1;
-  }
-  //Copy the list of bodies to the GPU memory
-  error = cudaMemcpy(devBodies, bodies, nbodies*sizeof(planet<type>), cudaMemcpyHostToDevice);
-  if (error != cudaSuccess)
-  {
-    std::cout << "Failed to copy from host to device memory: " << cudaGetErrorString(error) << std::endl;
-    return -1;
-  }
-#endif
-
-  for (int i = 1; i <= niters; ++i)  {
-
-#if GPU
-    advance_gpued(nbodies, devBodies);
-#else
-    advance(nbodies, bodies);
-#endif
-
-  }
-
-#if GPU
-  //Set all memory for the list of bodies on the CPU to zero to ensure there are no random errors. 
-  memset(bodies, 0, nbodies*sizeof(planet<type>));
-  //Copy data from GPU memory to CPU memory
-  error = cudaMemcpy(bodies, devBodies, nbodies*sizeof(planet<type>), cudaMemcpyDeviceToHost);
-  if (error != cudaSuccess)
-  {
-    std::cout << "Failed to copy from device to host memory: " << cudaGetErrorString(error) << std::endl;
-  }
-  //Free memory on the GPU
-  error = cudaFree(devBodies);
-  if (error != cudaSuccess)
-  {
-    std::cout << "Failed to free device memory. \n";
-  }
-#endif
-
-  timerAdvance.end();
-  scale_bodies(nbodies, bodies, RECIP_DT);
-
-  type e2 = energy(nbodies, bodies);
-
-  std::cout << std::setprecision(9);
-  std::cout << e1 << '\n' << e2 << '\n';
-  timerMain.end();
-
-  if (argc != 1) { delete [] bodies; }
   outStream.close();
   return 0;
 }
