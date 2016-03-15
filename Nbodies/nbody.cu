@@ -20,7 +20,7 @@
 
 #define GPU 1
 #define DP 0
-#define VERBOSE
+//#define VERBOSE
 
 #if DP
 using type = double;
@@ -48,7 +48,11 @@ __global__ void advanceVelocities(int nbodies, planet<T> *bodies, int offset)
 {
   int j = threadIdx.x + offset;
   int i = blockIdx.x;
-  //T valid = fmax(0.0, fmin(1.0, (T)(j - i))); //Returns either 1 or 0. 1 if j is valid, 0 if it is not. 
+//#if DP
+//  T valid = fmax(0.0, fmin(1.0, (T)(j - i))); //Returns either 1 or 0. 1 if j is valid, 0 if it is not. 
+//#else
+//  T valid = fmaxf(0.0f, fminf(1.0f, (T)(j - i))); //Returns either 1 or 0. 1 if j is valid, 0 if it is not. 
+//#endif
 
   if (i < nbodies && j < nbodies && j>i)
   {
@@ -99,6 +103,7 @@ void advance_gpued(int nbodies, planet<T> *bodies)
     }
 #endif
   }
+  cudaDeviceSynchronize();
   //Advance positions
   for (int i = 0; i < numIterations; ++i)
   {
@@ -112,6 +117,7 @@ void advance_gpued(int nbodies, planet<T> *bodies)
     }
 #endif
   }
+  cudaDeviceSynchronize();
 }
 
 template <typename T>
