@@ -18,7 +18,9 @@
 #include <iomanip>
 #include <string>
 
-#define DP 1
+#define GPU 1
+#define DP 0
+#define VERBOSE
 
 #if DP
 using type = double;
@@ -84,27 +86,31 @@ template <typename T>
 void advance_gpued(int nbodies, planet<T> *bodies)
 {
   //Advance velocities
-  int numIterations = ceil(nbodies / maxThreadsPerBlock);
+  int numIterations = ceil((T)nbodies / maxThreadsPerBlock);
   for (int i = 0; i < numIterations; ++i)
   {
     advanceVelocities << <nbodies, min(nbodies, maxThreadsPerBlock) >> >(nbodies, bodies, i*maxThreadsPerBlock);
-  }
-  cudaDeviceSynchronize();
-  cudaError_t error = cudaGetLastError();
-  if (error != cudaSuccess)
-  {
-    std::cout << "Error in velocity kernal: " << cudaGetErrorString(error) << std::endl;
+#ifdef VERBOSE
+    cudaDeviceSynchronize();
+    cudaError_t error = cudaGetLastError();
+    if (error != cudaSuccess)
+    {
+      std::cout << "Error in velocity kernal: " << cudaGetErrorString(error) << std::endl;
+    }
+#endif
   }
   //Advance positions
   for (int i = 0; i < numIterations; ++i)
   {
     advancePositions << <1, min(nbodies, maxThreadsPerBlock) >> >(nbodies, bodies, i*maxThreadsPerBlock);
-  }
-  cudaDeviceSynchronize();
-  error = cudaGetLastError();
-  if (error != cudaSuccess)
-  {
-    std::cout << "Error in position kernal: " << cudaGetErrorString(error) << std::endl;
+#ifdef VERBOSE
+    cudaDeviceSynchronize();
+    cudaError_t error = cudaGetLastError();
+    if (error != cudaSuccess)
+    {
+      std::cout << "Error in position kernal: " << cudaGetErrorString(error) << std::endl;
+    }
+#endif
   }
 }
 
@@ -247,7 +253,7 @@ void init_random_bodies(int nbodies, planet<T> *bodies)
 }
 
 template <typename T>
-void run(int nbodies, int iterations, bool gpu)
+void run(int iterations, int nbodies, bool gpu)
 {
   planet<type> *bodies;
   if (nbodies == 5) {
@@ -258,8 +264,8 @@ void run(int nbodies, int iterations, bool gpu)
     init_random_bodies(nbodies, bodies);
   }
 
-  std::string runName = std::to_string(nbodies);
-  runName += "," + iterations;
+  std::string runName = std::to_string(iterations);
+  runName = runName + ", " + std::to_string(nbodies);
   Timer timerMain; timerMain.start(runName);
   offset_momentum(nbodies, bodies);
   type e1 = energy(nbodies, bodies);
@@ -272,16 +278,20 @@ void run(int nbodies, int iterations, bool gpu)
   {
     //Allocate memory on the GPU for the list of bodies. 
     error = cudaMalloc(&devBodies, nbodies*sizeof(planet<type>));
+#ifdef VERBOSE
     if (error != cudaSuccess)
     {
       std::cout << "Failed to allocate global memory for CUDA. \n";
     }
+#endif
     //Copy the list of bodies to the GPU memory
     error = cudaMemcpy(devBodies, bodies, nbodies*sizeof(planet<type>), cudaMemcpyHostToDevice);
+#ifdef VERBOSE
     if (error != cudaSuccess)
     {
       std::cout << "Failed to copy from host to device memory: " << cudaGetErrorString(error) << std::endl;
     }
+#endif
   }
 
   for (int i = 1; i <= iterations; ++i)  
@@ -302,22 +312,25 @@ void run(int nbodies, int iterations, bool gpu)
     memset(bodies, 0, nbodies*sizeof(planet<type>));
     //Copy data from GPU memory to CPU memory
     error = cudaMemcpy(bodies, devBodies, nbodies*sizeof(planet<type>), cudaMemcpyDeviceToHost);
+#ifdef VERBOSE
     if (error != cudaSuccess)
     {
       std::cout << "Failed to copy from device to host memory: " << cudaGetErrorString(error) << std::endl;
     }
+#endif
     //Free memory on the GPU
     error = cudaFree(devBodies);
+#ifdef VERBOSE
     if (error != cudaSuccess)
     {
       std::cout << "Failed to free device memory. \n";
     }
+#endif
   }
   scale_bodies(nbodies, bodies, RECIP_DT);
 
   type e2 = energy(nbodies, bodies);
 
-  std::cout << std::setprecision(9);
   std::cout << e1 << '\n' << e2 << '\n';
   timerMain.end();
 
@@ -336,12 +349,30 @@ int main(int argc, char ** argv)
 #else
   outputName += "_float";
 #endif
-  outputName += ".csv";
+#if GPU
+  outputName += "_GPU.csv";
+#else
+  outputName += "_CPU.csv";
+#endif
+
+
+  std::cout << std::setprecision(18);
 
   std::ofstream outStream(outputName);
+  outStream << "Iterations, Bodies, Time\n";
   Timer::setFileStream(&outStream);
 
-  run<type>(1000, 1000, true);
+  for (int bodies = 100; bodies <= 1000; bodies += 100)
+  {
+    for (int iterations = 100; iterations <= 1000; iterations += 100)
+    {
+#if GPU
+      run<type>(iterations, bodies, true);
+#else
+      run<type>(iterations, bodies, false);
+#endif
+    }
+  }
 
   outStream.close();
   return 0;
